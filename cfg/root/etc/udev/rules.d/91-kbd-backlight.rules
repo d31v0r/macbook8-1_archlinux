@@ -1,0 +1,5 @@
+# Let members of group "video" change the keyboard backlight without root.
+# ArchWiki (Backlight): GROUP=/MODE= don't work for sysfs attributes, so chgrp/chmod via RUN.
+# Named 91- so it runs AFTER brightnessctl's own 90-brightnessctl.rules, which hands LED devices to group "input";
+# ours must win. Add yourself:  sudo usermod -aG video "$USER"  (re-login afterwards)
+SUBSYSTEM=="leds", KERNEL=="smc::kbd_backlight", RUN+="/usr/bin/chgrp video /sys/class/leds/%k/brightness", RUN+="/usr/bin/chmod g+w /sys/class/leds/%k/brightness"

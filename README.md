@@ -43,11 +43,11 @@ the old text and hardware dumps are kept in [`docs/legacy-2015/`](docs/legacy-20
 ## Repository layout
 
 ```
-cfg/root/        defaults for this machine, copy onto / after reading them:   sudo cp -rv cfg/root/* /
+cfg/root/        config installed by scripts/post-install.sh (or copy by hand: sudo cp -rv cfg/root/* /)
 cfg/optional/    pick ONE Wi-Fi setup (wifi-wl or wifi-b43), same copy method
-cfg/examples/    example ~/.xinitrc and an example X11 keyboard-layout file (edit before use)
+cfg/examples/    example ~/.xinitrc, ~/.xbindkeysrc, and an X11 keyboard-layout file (edit before use)
 cfg/legacy/      the original pekwm/lightdm/powertop/.Xdefaults files, unchanged
-scripts/         collect-hwinfo.sh: regenerates the dumps in docs/legacy-2015/output/
+scripts/         post-install.sh (the automated setup), check.sh (health check), collect-hwinfo.sh (regenerates the old dumps)
 docs/legacy-2015 the original README and lspci/lsusb/dmesg output (kernel 3.18, 2015)
 ```
 
@@ -84,33 +84,39 @@ rEFInd auto-detects `vmlinuz-linux` + `initramfs-linux.img`. If `/boot` is on a 
 
 If the initramfs can't find the root filesystem, add `ahci` to `MODULES=()` in `/etc/mkinitcpio.conf` and run `mkinitcpio -P` (an old ArchWiki tip for this model, probably unnecessary now).
 
-### 4. Post-install
+### 4. Post-install (automated)
+
+After the first boot into the installed system (network via Ethernet), as your normal user with `sudo`:
 
 ```sh
-# base desktop bits (X11 path; for Wayland skip xorg-* and see below)
-sudo pacman -S mesa xorg-server xorg-xinit xorg-apps xf86-input-libinput ttf-dejavu
+sudo pacman -S --needed git
+git clone <this repo> && cd macbook8-1_archlinux
+sudo ./scripts/post-install.sh --dry-run     # read what it will do first
+sudo ./scripts/post-install.sh --x11 --layouts us,ru
+sudo reboot
+./scripts/check.sh                           # after the reboot
+```
 
-# sound
-sudo pacman -S pipewire pipewire-pulse wireplumber pavucontrol playerctl
+Options: `--wifi wl|b43|none` (default `wl`), `--x11`/`--no-x11`, `--no-extras`, `--layouts`, `--sleep-hook`, `--user`, `--yes`, `--force`, `--dry-run`. `--help` lists them.
+What it does, step by step, is in [`docs/REPORT.md`](docs/REPORT.md). It is idempotent, keeps `.bak` copies of any file it overwrites, refuses to run on anything but a `MacBookPro8,1` (unless `--force`), and never touches partitions or boot-loader binaries.
 
-# network (NetworkManager; iwd alone also works, but needs EnableNetworkConfiguration=true in /etc/iwd/main.conf)
-sudo pacman -S networkmanager
-sudo systemctl enable --now NetworkManager
+`scripts/check.sh` is a read-only health check (Wi-Fi driver bound, backlights, applesmc/coretemp, TLP, PipeWire, ...).
 
-# power, sensors, misc
-sudo pacman -S tlp lm_sensors brightnessctl udiskie gammastep bluez bluez-utils
-sudo systemctl enable --now tlp bluetooth
-sudo systemctl mask systemd-rfkill.service systemd-rfkill.socket   # required by TLP's docs
+<details><summary>Doing it by hand instead</summary>
 
-# configs from this repo (read them first!)
-git clone https://github.com/gammy/macbook8-1_archlinux && cd macbook8-1_archlinux   # or your fork
+```sh
+sudo pacman -Syu --needed base-devel git dkms brightnessctl tlp lm_sensors bluez bluez-utils networkmanager \
+    pipewire pipewire-pulse pipewire-alsa wireplumber mesa libva-intel-driver intel-ucode \
+    xorg-server xorg-xinit xorg-apps xf86-input-libinput xbindkeys        # X11 only
+sudo systemctl enable NetworkManager tlp bluetooth
+sudo systemctl mask systemd-rfkill.service systemd-rfkill.socket           # required by TLP's docs
 sudo cp -rv cfg/root/* /
 sudo usermod -aG video "$USER"
 sudo mkinitcpio -P
-sudo udevadm control --reload && sudo udevadm trigger
 ```
 
-Then reboot.
+then Wi-Fi as below, `mbpfan` from the AUR, and `acpi_backlight=native` only if `/sys/class/backlight/intel_backlight` is missing.
+</details>
 
 ## Wi-Fi
 
@@ -172,7 +178,7 @@ The 2015 author gave up on both and bought a USB adapter (D-Link DWA-171, Realte
 
 ## Backlights and media keys
 
-The keys emit the standard `XF86*` symbols. Nothing acts on them unless your desktop or WM does. Desktop environments handle them for you. For a bare WM, bind them:
+The keys emit the standard `XF86*` symbols. Nothing acts on them unless your desktop or WM does. Desktop environments handle them for you. For a bare X11 WM, `post-install.sh --x11` installs [`cfg/examples/xbindkeysrc`](cfg/examples/xbindkeysrc) as `~/.xbindkeysrc` (start `xbindkeys &`). For Wayland or a WM with its own keybindings, bind:
 
 ```
 XF86MonBrightnessUp    -> brightnessctl set 5%+
@@ -186,7 +192,7 @@ XF86AudioPlay/Prev/Next-> playerctl play-pause / previous / next
 XF86Eject              -> eject
 ```
 
-This resolves the "Work in progress" item from 2015: keyboard-backlight keys don't produce ACPI events, but they do produce input events, so the WM binding + the [udev rule](cfg/root/etc/udev/rules.d/90-kbd-backlight.rules) (write access for group `video`) is all that's needed.
+This resolves the "Work in progress" item from 2015: keyboard-backlight keys don't produce ACPI events, but they do produce input events, so the WM binding + the [udev rule](cfg/root/etc/udev/rules.d/91-kbd-backlight.rules) (write access for group `video`) is all that's needed.
 
 ## Power and thermals
 
