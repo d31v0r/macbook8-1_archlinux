@@ -4,17 +4,19 @@ Configuration and notes for running current Arch Linux on the Early 2011 13" Mac
 This is a 2026 rewrite of the original 2015 guide by [gammy](https://github.com/gammy/macbook8-1_archlinux);
 the old text and hardware dumps are kept in [`docs/legacy-2015/`](docs/legacy-2015/README.md).
 
-> **Status:** rewritten from the original repo, the hardware dumps in it, and the current ArchWiki
-> ([MacBookPro8,x](https://wiki.archlinux.org/title/MacBookPro8,x)). Not yet re-verified on real hardware with a 2026 kernel.
-> Items marked **(verify)** are the ones most likely to need adjusting. PRs with results welcome.
+> **Status:** written from the original repo, its hardware dumps, the ArchWiki
+> ([MacBookPro8,x](https://wiki.archlinux.org/title/MacBookPro8,x), [Intel graphics](https://wiki.archlinux.org/title/Intel_graphics), [TLP](https://wiki.archlinux.org/title/TLP)),
+> the [rEFInd SIP page](https://www.rodsbooks.com/refind/sip.html), the [b43 docs](https://wireless.docs.kernel.org/en/latest/en/users/drivers/b43.html) and current package listings (checked Sep 2026).
+> **Not yet run on real hardware with a 2026 kernel.** Items marked **(verify)** are the likeliest to need adjusting. PRs with results welcome.
 
 ## Hardware (from the legacy `lspci`/`lsusb` dumps)
 
 | Part | Device | Linux driver |
 |---|---|---|
-| GPU | Intel HD Graphics 3000 (no discrete GPU on the 13") | `i915`, Mesa `crocus` |
+| GPU | Intel HD Graphics 3000 (no discrete GPU on the 13"); no Vulkan on this generation | `i915`, Mesa `crocus` (OpenGL) |
 | Wi-Fi | Broadcom BCM4331 (`14e4:4331`) | `wl` (proprietary) or `b43` |
-| Ethernet / SD reader | Broadcom BCM57765 | `tg3` |
+| Ethernet | Broadcom BCM57765 | `tg3` |
+| SD card reader | Broadcom BCM57765/57785 SDXC | `sdhci-pci` (untested) |
 | Bluetooth | Broadcom BCM2070 (USB `05ac:821a`) | `btusb` |
 | Camera | FaceTime HD (USB `05ac:8509`) | `uvcvideo` |
 | Keyboard/trackpad | Apple internal, ISO (USB `05ac:0253`) | `hid_apple`, `bcm5974` |
@@ -26,7 +28,7 @@ the old text and hardware dumps are kept in [`docs/legacy-2015/`](docs/legacy-20
 | 2015 guide | Now |
 |---|---|
 | `xf86-input-mtrack` (AUR) / synaptics | **libinput**, in-kernel `bcm5974`; see [`30-touchpad.conf`](cfg/root/etc/X11/xorg.conf.d/30-touchpad.conf) |
-| `xf86-video-intel` | Xorg **modesetting** driver (default). Keep `xf86-video-intel` only as a fallback if you see tearing/glitches |
+| `xf86-video-intel` | Xorg **modesetting** driver (default, recommended by the ArchWiki). `xf86-video-intel` is legacy and "generally not recommended"; if 3D is unstable on this old GPU the wiki also offers `mesa-amber` (legacy classic driver, unmaintained) |
 | `xorg-server-utils` | Gone; use `xorg-apps` |
 | `yaourt` | `paru` or `yay` (or build from the AUR by hand) |
 | `wicd` | **NetworkManager** or **iwd** |
@@ -41,9 +43,9 @@ the old text and hardware dumps are kept in [`docs/legacy-2015/`](docs/legacy-20
 ## Repository layout
 
 ```
-cfg/root/        safe defaults, copy onto / after reading them:   sudo cp -rv cfg/root/* /
+cfg/root/        defaults for this machine, copy onto / after reading them:   sudo cp -rv cfg/root/* /
 cfg/optional/    pick ONE Wi-Fi setup (wifi-wl or wifi-b43), same copy method
-cfg/examples/    example ~/.xinitrc (bare X11 WM)
+cfg/examples/    example ~/.xinitrc and an example X11 keyboard-layout file (edit before use)
 cfg/legacy/      the original pekwm/lightdm/powertop/.Xdefaults files, unchanged
 scripts/         collect-hwinfo.sh: regenerates the dumps in docs/legacy-2015/output/
 docs/legacy-2015 the original README and lspci/lsusb/dmesg output (kernel 3.18, 2015)
@@ -62,17 +64,17 @@ docs/legacy-2015 the original README and lspci/lsusb/dmesg output (kernel 3.18, 
 Use `archinstall` or the [manual installation guide](https://wiki.archlinux.org/title/Installation_guide).
 Mac-specific points:
 
-- **Reuse the existing ESP** (`/dev/sda1`, ~200 MB, FAT32) and mount it at `/boot` or `/efi`. Don't create a second one.
+- **Reuse the existing ESP** (`/dev/sda1`, FAT32, small: about 200 MB on stock Macs, check with `lsblk`) and mount it at `/boot` or `/efi`. Don't create a second one. If you mount it at `/boot`, kernel + initramfs + fallback initramfs can fill 200 MB; consider `/efi` for the ESP and keeping `/boot` on the root filesystem (rEFInd then needs its filesystem driver, e.g. btrfs).
 - Add your Linux partitions in the free space (`gdisk`/`cfdisk`). The 2015 layout (swap + btrfs root + btrfs home) is still a fine example.
-- The installer ISO can't drive the BCM4331 Wi-Fi out of the box (wiki: switch from `b43`/`bcma` to `wl`). Use the built-in **Gigabit Ethernet** port (BCM57765, `tg3`, works out of the box) or USB tethering from a phone.
+- The BCM4331 Wi-Fi may not come up on the installer ISO (the ArchWiki suggests switching from `b43`/`bcma` to `wl`, which needs the DKMS package, so not possible from the ISO alone). Use the built-in **Gigabit Ethernet** port (BCM57765, `tg3`, works out of the box) or USB tethering from a phone.
 - Include `linux linux-firmware linux-headers dkms broadcom-wl-dkms networkmanager` in `pacstrap` if you want Wi-Fi to work on first boot (see [Wi-Fi](#wi-fi)).
-- Don't bother with GRUB here; rEFInd is simpler on a Mac (next step). If you prefer GRUB, install it to the ESP with `--removable`.
+- Don't bother with GRUB here; rEFInd is simpler on a Mac (next step).
 
 ### 3. Boot manager: rEFInd
 
-Install [rEFInd](https://www.rodsbooks.com/refind/installing.html#osx) from **macOS** onto the existing ESP, as in the original guide (manual `bless --setBoot` or the `refind-install` script). On macOS 10.11 and newer, System Integrity Protection can block `bless`; the rEFInd page describes running the installer from Recovery. **(verify on your macOS version)**
+Install [rEFInd](https://www.rodsbooks.com/refind/installing.html#osx) from **macOS** onto the existing ESP, as in the original guide (manual `bless --setBoot` or the `refind-install` script). From macOS 10.11 on, System Integrity Protection blocks `bless`, so the installer has to be run from **Recovery mode** (Cmd+R, then Terminal), with SIP disabled, or from another OS. rEFInd's author recommends trying Recovery mode first. See [rEFInd: SIP](https://www.rodsbooks.com/refind/sip.html).
 
-rEFInd normally auto-detects `vmlinuz-linux` + `initramfs-linux.img` in the same directory. Mounting the ESP at `/boot` is the simplest layout. If your `/boot` lives on the btrfs/ext4 root instead, enable the matching rEFInd filesystem driver. To set the kernel command line, put it in `/boot/refind_linux.conf`:
+rEFInd auto-detects `vmlinuz-linux` + `initramfs-linux.img`. If `/boot` is on a btrfs/ext4 root (not on the ESP), enable the matching rEFInd filesystem driver. To set the kernel command line, put it in `/boot/refind_linux.conf`:
 
 ```
 "Boot with defaults" "root=UUID=<your-root-uuid> rw acpi_backlight=native"
@@ -89,7 +91,7 @@ If the initramfs can't find the root filesystem, add `ahci` to `MODULES=()` in `
 sudo pacman -S mesa xorg-server xorg-xinit xorg-apps xf86-input-libinput ttf-dejavu
 
 # sound
-sudo pacman -S pipewire pipewire-pulse wireplumber pavucontrol
+sudo pacman -S pipewire pipewire-pulse wireplumber pavucontrol playerctl
 
 # network (NetworkManager; iwd alone also works, but needs EnableNetworkConfiguration=true in /etc/iwd/main.conf)
 sudo pacman -S networkmanager
@@ -100,7 +102,7 @@ sudo pacman -S tlp lm_sensors brightnessctl udiskie gammastep bluez bluez-utils
 sudo systemctl enable --now tlp bluetooth
 sudo systemctl mask systemd-rfkill.service systemd-rfkill.socket   # required by TLP's docs
 
-# my configs (read them first!)
+# configs from this repo (read them first!)
 git clone https://github.com/gammy/macbook8-1_archlinux && cd macbook8-1_archlinux   # or your fork
 sudo cp -rv cfg/root/* /
 sudo usermod -aG video "$USER"
@@ -114,15 +116,18 @@ Then reboot.
 
 The BCM4331 is the awkward part of this machine, as in 2015. Pick **one**:
 
-**A) `wl`, the proprietary driver (recommended by the ArchWiki for this chip)**
+**A) `wl`, the proprietary driver (the ArchWiki's suggestion for this chip; full 5 GHz and 802.11n)**
 
 ```sh
-sudo pacman -S dkms linux-headers broadcom-wl-dkms
-sudo cp -rv cfg/optional/wifi-wl/etc/* /etc/       # blacklists the competing in-kernel modules
+# stock `linux` kernel: prebuilt module
+sudo pacman -S broadcom-wl
+# any other kernel (linux-lts, ...): DKMS
+#   sudo pacman -S dkms linux-lts-headers broadcom-wl-dkms
+sudo cp -rv cfg/optional/wifi-wl/etc/* /etc/       # extra blacklist, see note
 sudo mkinitcpio -P && sudo reboot
 ```
 
-`broadcom-wl-dkms` is in the official repos, but it's an out-of-tree, frozen driver. New kernels occasionally break the build or the runtime. Keep `linux-lts` + `linux-lts-headers` installed as a fallback. Forum reports exist of freezes on a specific kernel while a neighbouring one worked (Manjaro, kernel 6.6.5 vs 6.5.13). **(verify)**
+Both packages are in the official `extra` repo (the DKMS one was last rebuilt in June 2026, with a newer build in `extra-testing` in August 2026). The DKMS package already ships its own blacklist in `/usr/lib/modprobe.d/`, so `cfg/optional/wifi-wl/etc/modprobe.d/broadcom-wl.conf` is a belt-and-braces duplicate. It is still a closed-source, frozen (6.30.223.271) out-of-tree driver, so a new kernel can break it. Keep `linux-lts` around as a fallback. A Manjaro thread reports freezes on kernel 6.6.5 with `wl` while 6.5.13 was fine. **(verify)**
 
 If the machine hangs on resume while Wi-Fi reconnects (this was the 2015 problem), also install the systemd sleep hook:
 
@@ -133,18 +138,21 @@ sudo install -m755 cfg/optional/wifi-wl/usr/lib/systemd/system-sleep/wl-reload /
 **B) `b43` (in-kernel, needs firmware from the AUR)**
 
 ```sh
-sudo pacman -Rns broadcom-wl-dkms                  # if installed; also remove the wifi-wl blacklist file
+sudo pacman -Rns broadcom-wl-dkms                  # (or broadcom-wl) if installed
+sudo rm -f /etc/modprobe.d/broadcom-wl.conf        # do NOT blacklist bcma/b43 here: b43 needs bcma for the BCM4331
 paru -S b43-firmware
 sudo cp -rv cfg/optional/wifi-b43/etc/* /etc/
 sudo reboot
 ```
 
-Reports about BCM4331 on `b43` are mixed; the 2015 author gave up on both drivers and bought a USB adapter (D-Link DWA-171, Realtek 8812AU). That's still the boring, reliable option: `paru -S rtl8812au-dkms-git` or any adapter with an in-kernel driver.
+The BCM4331 is supported by `b43` (kernel 3.2+), but the kernel's own b43 page lists limits for this HT-PHY chip: **no 5 GHz and no 802.11n features** (no HT, aggregation, 40 MHz). Expect 2.4 GHz at roughly 802.11g speeds. That is why `wl` is the usual choice.
+
+The 2015 author gave up on both and bought a USB adapter (D-Link DWA-171, Realtek 8812AU). That's still the boring option. Use any adapter with an in-kernel driver, or the AUR `rtl8812au` DKMS packages if that's what you have.
 
 ## Keyboard and trackpad
 
 - **F-keys:** [`hid_apple.conf`](cfg/root/etc/modprobe.d/hid_apple.conf) sets `fnmode=2` (F1-F12 by default, Fn for media keys). Change it to taste. The ISO layout's swapped `` ` ``/`<` is fixed with `iso_layout=0` (commented example in the same file).
-- **Layouts:** [`00-keyboard.conf`](cfg/root/etc/X11/xorg.conf.d/00-keyboard.conf) is an *example* (`us,ru`, Alt+Shift). Edit it or use `localectl set-x11-keymap`.
+- **Layouts:** [`cfg/examples/xorg-keyboard.conf`](cfg/examples/xorg-keyboard.conf) is an *example* (`us,ru`, Alt+Shift), not installed by the copy step. Copy it to `/etc/X11/xorg.conf.d/00-keyboard.conf` after editing, or just use `localectl set-x11-keymap`.
 - **Trackpad:** libinput handles palm rejection, thumbs and gestures itself. The provided config gives: tap = left, two-finger tap = middle, three-finger tap = right; physical click with one/two/three fingers = left/right/middle. That mirrors the old `mtrack` layout. "Cmd+click to move window" was a WM binding, not a driver feature: bind your WM's modifier to Super/Cmd (`hid_apple swap_opt_cmd=1` if you want).
 - **Wayland (sway example):**
 
@@ -182,8 +190,8 @@ This resolves the "Work in progress" item from 2015: keyboard-backlight keys don
 
 ## Power and thermals
 
-- Use **TLP**, or `power-profiles-daemon`, not both, and not `powertop --auto-tune` on top. Auto-tune puts USB input devices into autosuspend, which can make an external mouse/keyboard laggy. The 2015 service is kept at [`cfg/legacy/powertop.service`](cfg/legacy/powertop.service) for reference.
-- Sensors and fans: `sudo sensors-detect`, then `sensors` (`applesmc` and `coretemp` show up). For custom fan curves there's `mbpfan` in the AUR. This machine is 15 years old, so if it runs hot after a decade, fresh thermal paste does more than any daemon.
+- Use **TLP**, or `power-profiles-daemon`, not both. TLP's defaults already apply Powertop's recommendations (ArchWiki), so a separate `powertop --auto-tune` service is redundant, and aggressive USB autosuspend can make input devices or Bluetooth flaky (TLP has `USB_DENYLIST` for that). The 2015 service is kept at [`cfg/legacy/powertop.service`](cfg/legacy/powertop.service) for reference.
+- Sensors and fans: `sudo sensors-detect`, then `sensors` (`applesmc` and `coretemp` show up). For custom fan curves there's `mbpfan` in the AUR (its README lists a 13" MBP 8,1 as tested, on kernel 3.2). This machine is 15 years old, so if it runs hot after a decade, fresh thermal paste does more than any daemon.
 - Suspend: lid-close suspend is handled by `systemd-logind`. Test suspend/resume with both AC and battery.
 
 ## Status of hardware
