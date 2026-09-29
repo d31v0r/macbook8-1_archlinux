@@ -1,165 +1,215 @@
-Archlinux on the Macbook Pro 8,1 (2011)
-=======================================
-Arch linux configuration and information for the macbook pro8,1 (2011). Written in the hope that it might help someone else trying to run linux on the macbook, and to help me remember.
+# Arch Linux on the MacBook Pro 8,1 (Early 2011, 13", A1278)
 
-Setup Goals
------------
-- Dual-boot the existing OS X installation alongside arch linux
-- Install arch via Live USB stick and internet (wired; wireless might be problematic, see below)
-- For linux to run better than OS X itself
+Configuration and notes for running current Arch Linux on the Early 2011 13" MacBook Pro (`MacBookPro8,1`).
+This is a 2026 rewrite of the original 2015 guide by [gammy](https://github.com/gammy/macbook8-1_archlinux);
+the old text and hardware dumps are kept in [`docs/legacy-2015/`](docs/legacy-2015/README.md).
 
-Where we Are
-------------
-It works pretty well! Fact is, almost everything works straight out of the box without configuration. The wireless controller needs an experimental/proprietary driver (which we can install and use), and the mousepad has a lot of options to consider. The same goes with the keyboard. Some things will need tweaking, but that's what you get with all of this freedom :}
+> **Status:** rewritten from the original repo, the hardware dumps in it, and the current ArchWiki
+> ([MacBookPro8,x](https://wiki.archlinux.org/title/MacBookPro8,x)). Not yet re-verified on real hardware with a 2026 kernel.
+> Items marked **(verify)** are the ones most likely to need adjusting. PRs with results welcome.
 
-Addendum: I am having continued trouble with the wifi. I'm ill while writing this, and I can't be bothered to add links or details. But generally, all drivers I have tried work poorly; crashing (just the driver) and/or randomly disconnecting. I've become really fed up with this, and have purchased a D-link DWA-171 "Wireless AC Dual-Band Nano USB Adapter". It works well even at a fair distance. I'm using the rtl8812au driver: https://github.com/gnab/rtl8812au
+## Hardware (from the legacy `lspci`/`lsusb` dumps)
 
-Gotchas
--------
-- With the base configuration described here, your touchpad will click on tap, right-click on triple-finger-tap, and paste on double-finger-tap. After `xf86-input-mtrack` is installed however, this is the configuration
-  - Click: `click`
-  - Right-click: `two-finger click`
-  - Middle-click: `two-finger tap`
-  - Move window: `cmd + click + movement`
-  - Resize window: `cmd + two-finger click + movement`
+| Part | Device | Linux driver |
+|---|---|---|
+| GPU | Intel HD Graphics 3000 (no discrete GPU on the 13") | `i915`, Mesa `crocus` |
+| Wi-Fi | Broadcom BCM4331 (`14e4:4331`) | `wl` (proprietary) or `b43` |
+| Ethernet / SD reader | Broadcom BCM57765 | `tg3` |
+| Bluetooth | Broadcom BCM2070 (USB `05ac:821a`) | `btusb` |
+| Camera | FaceTime HD (USB `05ac:8509`) | `uvcvideo` |
+| Keyboard/trackpad | Apple internal, ISO (USB `05ac:0253`) | `hid_apple`, `bcm5974` |
+| IR receiver | Apple (USB `05ac:8242`) | `usbhid` |
+| Extras | FireWire (LSI FW643), Thunderbolt 1 | untested |
 
-- I won't be using a fully integrated desktop environment, but if you do, some things might be easier
-- I won't delve *too* deep into making the environment look pretty here. Stuff like making the terminal colors nicer, mouse cursor, etc is left out for the mostpart
-- Some of my configuration can be found in `cfg/`, but remember that these might have become incompatible/outdated when you read this
-- I install pulseaudio but don't show how I start it. This is just in my window manager:s startup script. The same goes for devmon and so on
+## What changed since 2015
 
-Functionality
-=============
+| 2015 guide | Now |
+|---|---|
+| `xf86-input-mtrack` (AUR) / synaptics | **libinput**, in-kernel `bcm5974`; see [`30-touchpad.conf`](cfg/root/etc/X11/xorg.conf.d/30-touchpad.conf) |
+| `xf86-video-intel` | Xorg **modesetting** driver (default). Keep `xf86-video-intel` only as a fallback if you see tearing/glitches |
+| `xorg-server-utils` | Gone; use `xorg-apps` |
+| `yaourt` | `paru` or `yay` (or build from the AUR by hand) |
+| `wicd` | **NetworkManager** or **iwd** |
+| `pm-utils`, `uswsusp` | `systemd-logind` suspend (lid close works out of the box); systemd sleep hooks if needed |
+| LightDM + `wicd-gtk` + `devmon` | Your choice of greeter (greetd, SDDM, GDM, ly, ...) or just `startx`; `udiskie` for automount |
+| `pulseaudio` started from the WM script | **PipeWire** + WirePlumber, started by systemd user units |
+| `powertop --auto-tune` service | **TLP** (or `power-profiles-daemon`); don't run more than one |
+| `redshift` | `gammastep` (works on X11 and Wayland) |
+| Kernel params `i915.i915_enable_rc6=1 i915.lvds_downclock=1 ...` | Not needed by default. `i915.enable_fbc=1` is optional; ArchWiki warns it can cause stutter/freezes with some apps |
+| Keyboard backlight only via `root` + `/sys` | udev rule + `brightnessctl`, no root needed |
 
-Working
--------
-* Video
-* Audio (Builtin speakers, audio jack analog)
-* Webcam
-* Ethernet
-* CD
-* Multitouch (using `mtrack`)
-* WiFi
-* Software Suspend
-* Display brightness control
-* Multimedia keys: the following work/identify correctly out of the box: `XF86MonBrightnessDown` `XF86MonBrightnessUp` `XF86LaunchA` `XF86LaunchB` `XF86KbdBrightnessUp` `XF86KbdBrightnessDown` `XF86AudioPrev` `XF86AudioPlay` `XF86AudioNext` `XF86AudioMute` `XF86AudioLowerVolume` `XF86AudioRaiseVolume` `XF86Eject`. I bound some of these keys to scripts I've written. See http://github.com/gammy/misc-scripts.git
-- IR Remote (haven't verified all buttons though; up and down buttons seem special)
+## Repository layout
 
-Work in progress
-----------------
-- An unresolved problem is how to utilize the keyboard LED brightness keys. The only way I can currently configure the brightness is by writing to `/sys/`, which requires root priveleges. The only way I can think of is to handle the key events via the acpi handler (ie `/etc/acpi/handler.sh`), but these keys don't trigger acpi events!
-- Touchpad / Multitouch: It's not perfectly configured yet, but is almost there :)
+```
+cfg/root/        safe defaults, copy onto / after reading them:   sudo cp -rv cfg/root/* /
+cfg/optional/    pick ONE Wi-Fi setup (wifi-wl or wifi-b43), same copy method
+cfg/examples/    example ~/.xinitrc (bare X11 WM)
+cfg/legacy/      the original pekwm/lightdm/powertop/.Xdefaults files, unchanged
+scripts/         collect-hwinfo.sh: regenerates the dumps in docs/legacy-2015/output/
+docs/legacy-2015 the original README and lspci/lsusb/dmesg output (kernel 3.18, 2015)
+```
 
-Untested
---------
-- Thunderbolt...?
-- Bluetooth
-- SPDIF audio  (Probably works though, as the red LED is lit, and I can turn the light off by muting the SPDIF output via alsa)
+## Installation
 
-My setup process, more or less
-==============================
+### 1. Prepare macOS
 
-Pre-Install
------------
-* Prepare the USB Stick. I already had one lying around, but it's simple enough using `dd`.
-  - See https://www.archlinux.org/download/ and https://wiki.archlinux.org/index.php/USB_flash_installation_media
-* Boot into OS X
-* Launch the disk utility
-* Shrink the OS X (HFS+)-partition to an appropriate size; from 500 to 140G in my case
-* Turn the computer off
-* Insert the USB-stick, and then turn the mac on whilst holding down the ALT-key;
-  - Once the disk boot menu pops up, select the USB stick and continue.
-  - Once you've booted, you're dropped into a shell.
+- The last macOS this model officially supports is **High Sierra 10.13**. Keep it if you want dual boot.
+- In Disk Utility, shrink the macOS volume to make room. Leave the EFI system partition and the macOS partitions alone.
+- Write the Arch ISO to a USB stick (`dd`, balenaEtcher, ...), power on holding **Option (Alt)**, choose the stick (shown as "EFI Boot").
 
-Install
--------
-* The normal installation procedure follows, except that we don't configure any bootstrapping at all(no GRUB, etc)
-* Use `gdisk` to add your partitions. I wanted a simple scheme with a root, swap and home partition:
-<pre><code>
-[gammy@lucia ~]$ lsblk -f
-NAME   FSTYPE  LABEL       UUID                                 MOUNTPOINT
-sda                                                             
-├─sda1 vfat    EFI         70D6-1701                            
-├─sda2 hfsplus Untitled    18b62878-6a7b-3fa8-bbf7-d56a42fff1cf         <- OS X
-├─sda3 hfsplus Recovery HD c7034e4c-d6e8-3dfc-af2b-008be1735b33         <- OS X Recovery 
-├─sda4 swap                62dcdd3f-f6ee-4a00-9475-9c962cf602d6 [SWAP] 
-├─sda5 btrfs               09a733ec-3894-4b8b-b32f-7d63f2a0dd82 /
-└─sda6 btrfs               42a1f9fc-1c1b-4781-91f0-decec3ed51ce /home
-</code></pre>
-* Continue the install as usual (`loadkeys`, `mount`, `swapon`, `pacstrap`, `arch-chroot`, `mkinicpio`, etc)
+### 2. Install Arch
 
-Post-Install
-------------
-* Reboot into OSX
-* Download rEFInd and install it on your pre-existing ESP (EFI Service Partition): http://www.rodsbooks.com/refind/installing.html#osx
-  This involves mounting your ESP, making a few paths, and copying a few files. Alternatively an autoinstaller exists on the same site, but I didn't use it.
-* Reboot into arch linux (rEFInd will present arch as an option now)
-* Temporarily connect an ethernet cable for a wired network connection
-* Start it up 
- * `systemctl start dhcpcd` (note no enabling)
-* Update the package database (to get updated paths)
- * `pacman -Sy`
-* Install xorg basics
- * `pacman -S` `xorg-server` `xorg-server-utils` `xorg-apps` `xorg-xinit` `xorg-xev` `xf86-video-intel` `xf86-input-synaptics` `ttf-dejavu`
- * (Note that we optionally replace `xf86-input-synaptics` with the unofficial `xf86-input-mtrack` later, to utilize more features of the trackpad)
-* Install a grapical login manager
- * `pacman -S` `lightdm` `lightdm-gtk-greeter` 
- * `systemctl enable lightdm`
- * Edit `/etc/lightdm/lightdm.conf` so that `greeter-session` under `SeatDefaults` is set to `lightdm-gtk-greeter`
-* Install the wicd network connection manager
- * `pacman -S` `wicd` 
- - `systemctl enable wicd`
- - (Usually you can configure the network here by running `wicd-curses`, but it crashes when I select a network to configure. Maybe the experimental b43 driver does not provide something which wicd-curses wants - something which wicd-gtk handles, however..)
-* Install pulseaudio
- * `pacman -S` `pulseaudio` `pulseaudio-alsa` `pavucontrol` 
-* ACPI (for suspend on lid-close, etc)
- * `pacman -S` `acpid` `acpi`
-* And some miscellaneous stuff to ones own taste
- * `pacman -S` `pekwm` `gvim` `devmon` `pm-utils` `powertop`
-* Install yaourt, an AUR (Archlinux User Repository) package manager
- * https://archlinux.fr/yaourt-en#get_it (The simplest and best way is to add their repository)
-* Install proprietary wifi drivers via yaourt
- - `yaourt -S` `core/b43-fwcutter` `core/b43-firmware`
-* Install the unofficial mtrack trackpad driver
- - `yaourt -S` `xf86-input-mtrack-git`
-* Create a nonroot user
-* `reboot`
-* Login as your nonroot user, hopefully straight into pekwm
-* Configure your network from `wicd-gtk` to get online
-* Unmute audio from `pavucontrol`
-* Unplug the mains and run powertop (optionally installed earlier) in calibration mode as root. Leave the computer alone durig this process
- - `powertop --calibrate`
-* Copy configuration files from this repository to change mousepad and keyboard behavior, among other things (have a look at the configuration files and edit them first):
-<pre><code>
-pacman -S git
-cd /tmp/
-git clone https://github.com/gammy/macbook8-1_archlinux
-cd macbook8-1_archlinux
-sudo cp -r cfg/root/\* / # BEWARE! Have a look at the configuration files first!
-systemctl enable powertop
-reboot
-</code></pre>
+Use `archinstall` or the [manual installation guide](https://wiki.archlinux.org/title/Installation_guide).
+Mac-specific points:
 
-Resources
----------
-* WiFi
- - https://bbs.archlinux.org/viewtopic.php?id=192287&p=5
-* Partitioning / Pre-install
- - https://wiki.archlinux.org/index.php/MacBookPro8,1/8,2/8,3_%282011%29
-* Screen / Keyboard brightness
- - https://bbs.archlinux.org/viewtopic.php?id=105091
-* Touchpad
- - http://community.linuxmint.com/tutorial/view/1361
- - https://web.archive.org/web/20150210065444/http://uselessuseofcat.com/?p=74
- - https://github.com/BlueDragonX/xf86-input-mtrack
-* Uncategorized:
- - https://wiki.archlinux.org/index.php/MacBook
- - https://wiki.archlinux.org/index.php/MacBook#OS_X_with_Arch_Linux
- - https://wiki.archlinux.org/index.php/REFInd
- - https://bbs.archlinux.org/viewtopic.php?id=70170
- - https://wiki.archlinux.org/index.php/general_recommendations
- - https://wiki.archlinux.org/index.php/Broadcom_wireless#b43
- - https://wiki.archlinux.org/index.php/display_manager#Graphical
- - https://wiki.archlinux.org/index.php/LightDM
- - https://wiki.archlinux.org/index.php/UEFI
- - https://wiki.archlinux.org/index.php/powertop
+- **Reuse the existing ESP** (`/dev/sda1`, ~200 MB, FAT32) and mount it at `/boot` or `/efi`. Don't create a second one.
+- Add your Linux partitions in the free space (`gdisk`/`cfdisk`). The 2015 layout (swap + btrfs root + btrfs home) is still a fine example.
+- The installer ISO can't drive the BCM4331 Wi-Fi out of the box (wiki: switch from `b43`/`bcma` to `wl`). Use the built-in **Gigabit Ethernet** port (BCM57765, `tg3`, works out of the box) or USB tethering from a phone.
+- Include `linux linux-firmware linux-headers dkms broadcom-wl-dkms networkmanager` in `pacstrap` if you want Wi-Fi to work on first boot (see [Wi-Fi](#wi-fi)).
+- Don't bother with GRUB here; rEFInd is simpler on a Mac (next step). If you prefer GRUB, install it to the ESP with `--removable`.
+
+### 3. Boot manager: rEFInd
+
+Install [rEFInd](https://www.rodsbooks.com/refind/installing.html#osx) from **macOS** onto the existing ESP, as in the original guide (manual `bless --setBoot` or the `refind-install` script). On macOS 10.11 and newer, System Integrity Protection can block `bless`; the rEFInd page describes running the installer from Recovery. **(verify on your macOS version)**
+
+rEFInd normally auto-detects `vmlinuz-linux` + `initramfs-linux.img` in the same directory. Mounting the ESP at `/boot` is the simplest layout. If your `/boot` lives on the btrfs/ext4 root instead, enable the matching rEFInd filesystem driver. To set the kernel command line, put it in `/boot/refind_linux.conf`:
+
+```
+"Boot with defaults" "root=UUID=<your-root-uuid> rw acpi_backlight=native"
+```
+
+`acpi_backlight=native`: per the ArchWiki, since kernel 6.1 this model needs it for working display brightness. Check `ls /sys/class/backlight/` first; you want `intel_backlight`. **(verify)**
+
+If the initramfs can't find the root filesystem, add `ahci` to `MODULES=()` in `/etc/mkinitcpio.conf` and run `mkinitcpio -P` (an old ArchWiki tip for this model, probably unnecessary now).
+
+### 4. Post-install
+
+```sh
+# base desktop bits (X11 path; for Wayland skip xorg-* and see below)
+sudo pacman -S mesa xorg-server xorg-xinit xorg-apps xf86-input-libinput ttf-dejavu
+
+# sound
+sudo pacman -S pipewire pipewire-pulse wireplumber pavucontrol
+
+# network (NetworkManager; iwd alone also works, but needs EnableNetworkConfiguration=true in /etc/iwd/main.conf)
+sudo pacman -S networkmanager
+sudo systemctl enable --now NetworkManager
+
+# power, sensors, misc
+sudo pacman -S tlp lm_sensors brightnessctl udiskie gammastep bluez bluez-utils
+sudo systemctl enable --now tlp bluetooth
+sudo systemctl mask systemd-rfkill.service systemd-rfkill.socket   # required by TLP's docs
+
+# my configs (read them first!)
+git clone https://github.com/gammy/macbook8-1_archlinux && cd macbook8-1_archlinux   # or your fork
+sudo cp -rv cfg/root/* /
+sudo usermod -aG video "$USER"
+sudo mkinitcpio -P
+sudo udevadm control --reload && sudo udevadm trigger
+```
+
+Then reboot.
+
+## Wi-Fi
+
+The BCM4331 is the awkward part of this machine, as in 2015. Pick **one**:
+
+**A) `wl`, the proprietary driver (recommended by the ArchWiki for this chip)**
+
+```sh
+sudo pacman -S dkms linux-headers broadcom-wl-dkms
+sudo cp -rv cfg/optional/wifi-wl/etc/* /etc/       # blacklists the competing in-kernel modules
+sudo mkinitcpio -P && sudo reboot
+```
+
+`broadcom-wl-dkms` is in the official repos, but it's an out-of-tree, frozen driver. New kernels occasionally break the build or the runtime. Keep `linux-lts` + `linux-lts-headers` installed as a fallback. Forum reports exist of freezes on a specific kernel while a neighbouring one worked (Manjaro, kernel 6.6.5 vs 6.5.13). **(verify)**
+
+If the machine hangs on resume while Wi-Fi reconnects (this was the 2015 problem), also install the systemd sleep hook:
+
+```sh
+sudo install -m755 cfg/optional/wifi-wl/usr/lib/systemd/system-sleep/wl-reload /usr/lib/systemd/system-sleep/
+```
+
+**B) `b43` (in-kernel, needs firmware from the AUR)**
+
+```sh
+sudo pacman -Rns broadcom-wl-dkms                  # if installed; also remove the wifi-wl blacklist file
+paru -S b43-firmware
+sudo cp -rv cfg/optional/wifi-b43/etc/* /etc/
+sudo reboot
+```
+
+Reports about BCM4331 on `b43` are mixed; the 2015 author gave up on both drivers and bought a USB adapter (D-Link DWA-171, Realtek 8812AU). That's still the boring, reliable option: `paru -S rtl8812au-dkms-git` or any adapter with an in-kernel driver.
+
+## Keyboard and trackpad
+
+- **F-keys:** [`hid_apple.conf`](cfg/root/etc/modprobe.d/hid_apple.conf) sets `fnmode=2` (F1-F12 by default, Fn for media keys). Change it to taste. The ISO layout's swapped `` ` ``/`<` is fixed with `iso_layout=0` (commented example in the same file).
+- **Layouts:** [`00-keyboard.conf`](cfg/root/etc/X11/xorg.conf.d/00-keyboard.conf) is an *example* (`us,ru`, Alt+Shift). Edit it or use `localectl set-x11-keymap`.
+- **Trackpad:** libinput handles palm rejection, thumbs and gestures itself. The provided config gives: tap = left, two-finger tap = middle, three-finger tap = right; physical click with one/two/three fingers = left/right/middle. That mirrors the old `mtrack` layout. "Cmd+click to move window" was a WM binding, not a driver feature: bind your WM's modifier to Super/Cmd (`hid_apple swap_opt_cmd=1` if you want).
+- **Wayland (sway example):**
+
+  ```
+  input type:touchpad {
+      tap enabled
+      tap_button_map lmr
+      click_method clickfinger
+      natural_scroll enabled
+      dwt enabled
+  }
+  input type:keyboard {
+      xkb_layout us,ru
+      xkb_options grp:alt_shift_toggle
+  }
+  ```
+
+## Backlights and media keys
+
+The keys emit the standard `XF86*` symbols. Nothing acts on them unless your desktop or WM does. Desktop environments handle them for you. For a bare WM, bind them:
+
+```
+XF86MonBrightnessUp    -> brightnessctl set 5%+
+XF86MonBrightnessDown  -> brightnessctl set 5%-
+XF86KbdBrightnessUp    -> brightnessctl -d 'smc::kbd_backlight' set 10%+
+XF86KbdBrightnessDown  -> brightnessctl -d 'smc::kbd_backlight' set 10%-
+XF86AudioRaiseVolume   -> wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+
+XF86AudioLowerVolume   -> wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-
+XF86AudioMute          -> wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle
+XF86AudioPlay/Prev/Next-> playerctl play-pause / previous / next
+XF86Eject              -> eject
+```
+
+This resolves the "Work in progress" item from 2015: keyboard-backlight keys don't produce ACPI events, but they do produce input events, so the WM binding + the [udev rule](cfg/root/etc/udev/rules.d/90-kbd-backlight.rules) (write access for group `video`) is all that's needed.
+
+## Power and thermals
+
+- Use **TLP**, or `power-profiles-daemon`, not both, and not `powertop --auto-tune` on top. Auto-tune puts USB input devices into autosuspend, which can make an external mouse/keyboard laggy. The 2015 service is kept at [`cfg/legacy/powertop.service`](cfg/legacy/powertop.service) for reference.
+- Sensors and fans: `sudo sensors-detect`, then `sensors` (`applesmc` and `coretemp` show up). For custom fan curves there's `mbpfan` in the AUR. This machine is 15 years old, so if it runs hot after a decade, fresh thermal paste does more than any daemon.
+- Suspend: lid-close suspend is handled by `systemd-logind`. Test suspend/resume with both AC and battery.
+
+## Status of hardware
+
+**Worked in 2015, no known blockers now:** video, audio (speakers + jack), webcam, Ethernet, optical drive, multitouch, brightness, suspend, most IR remote buttons.
+
+**Needs care:** Wi-Fi (see above), keyboard backlight/brightness keys (need bindings), HDMI audio (2015 dmesg has `HDMI: invalid ELD data byte 0` spam, harmless but noisy).
+
+**Untested:** Bluetooth (ArchWiki reports pairing trouble with `b43`, see Troubleshooting), SD reader, Thunderbolt, FireWire, SPDIF (red LED lights up when the optical jack is in use), hibernate.
+
+## Troubleshooting
+
+- **No `intel_backlight`:** add `acpi_backlight=native` (see above).
+- **Black screen / no display under EFI boot:** that's the 15"/17" models' problem (AMD + Intel). The 13" 8,1 has only the Intel GPU. Don't copy `radeon.modeset=0` / `i915.modeset=0` advice from other 8,x pages.
+- **Wi-Fi interface missing (`ip link`):** `lspci -k -s 03:00.0` shows which driver is bound. Make sure only one of `wl` / `b43` is loaded and that competing modules are blacklisted.
+- **Bluetooth pairing fails with `b43`:** `options b43 btcoex=0` (already in `cfg/optional/wifi-b43`).
+- **HFS+ macOS partition mounts read-only:** turn journaling off in macOS, or just leave it alone.
+
+## Resources
+
+- [ArchWiki: MacBookPro8,x](https://wiki.archlinux.org/title/MacBookPro8,x)
+- [ArchWiki: Broadcom wireless](https://wiki.archlinux.org/title/Broadcom_wireless)
+- [ArchWiki: Backlight](https://wiki.archlinux.org/title/Backlight), [libinput](https://wiki.archlinux.org/title/Libinput), [TLP](https://wiki.archlinux.org/title/TLP), [rEFInd](https://wiki.archlinux.org/title/REFInd)
+- [rEFInd install docs](https://www.rodsbooks.com/refind/installing.html)
+- Original repo: [gammy/macbook8-1_archlinux](https://github.com/gammy/macbook8-1_archlinux)
+
+## License / credits
+
+The original repository does not declare a license. Original content and hardware dumps are by gammy and kept under `docs/legacy-2015/` and `cfg/legacy/`. If you publish this rewrite, keep the attribution, and ideally ask the author for permission or open a PR against the original.

@@ -1,0 +1,7 @@
+#!/bin/sh
+# Only install this if the machine hangs on resume while wl reconnects
+# (the 2015 fix was SUSPEND_MODULES="bcma b43" in pm-utils; this is the systemd equivalent, not verified on current kernels).
+case "$1" in
+    pre)  modprobe -r wl ;;
+    post) modprobe wl ;;
+esac
