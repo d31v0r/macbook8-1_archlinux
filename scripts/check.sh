@@ -11,7 +11,9 @@ enabled() { systemctl is-enabled --quiet "$1" 2>/dev/null; }
 echo "== machine"
 model=$(cat /sys/class/dmi/id/product_name 2>/dev/null)
 [[ $model == MacBookPro8,1 ]] && ok "MacBookPro8,1" || bad "product is '$model'"
-echo "kernel: $(uname -r)"; echo "cmdline: $(cat /proc/cmdline)"
+rel=$(uname -r)
+echo "kernel: $rel"; echo "cmdline: $(cat /proc/cmdline)"
+[[ $rel == *lts* ]] && ok "booted linux-lts ($rel)"
 
 echo "== display / graphics"
 [[ -e /sys/class/backlight/intel_backlight ]] && ok "intel_backlight present" || nope "no intel_backlight (add acpi_backlight=native to the kernel command line)"
@@ -27,8 +29,20 @@ compgen -G '/dev/input/by-path/*' >/dev/null && ok "input devices present"
 
 echo "== Wi-Fi / Bluetooth"
 drv=$(lspci -nnk -d 14e4:4331 2>/dev/null | sed -n 's/.*Kernel driver in use: //p')
-[[ -n $drv ]] && ok "BCM4331 driver in use: $drv" || nope "BCM4331 has no driver bound"
+if [[ -n $drv ]]; then
+    ok "BCM4331 driver in use: $drv"
+    [[ $drv == wl && $rel == *lts* ]] && ok "wl bound on linux-lts"
+elif [[ $rel =~ ^([0-9]+)\.([0-9]+) ]] && (( BASH_REMATCH[1] > 7 || (BASH_REMATCH[1] == 7 && BASH_REMATCH[2] >= 2) )); then
+    nope "BCM4331 has no driver. This kernel cannot build broadcom-wl. Reboot into linux-lts"
+else
+    nope "BCM4331 has no driver bound"
+fi
 ip -br link 2>/dev/null | grep -q '^wl' && ok "wireless interface exists" || nope "no wlan interface"
+if lspci -nnk 2>/dev/null | grep -A3 'Ethernet controller' | grep -q 'Kernel driver in use: tg3'; then
+    ok "Ethernet tg3 bound (BCM57765)"
+else
+    bad "Ethernet tg3 not bound. If wl blacklisted it, check /etc/modprobe.d/keep-tg3.conf"
+fi
 active NetworkManager && ok "NetworkManager active" || bad "NetworkManager not active (other network manager in use?)"
 active bluetooth && ok "bluetooth.service active" || bad "bluetooth.service not active"
 have rfkill && rfkill list bluetooth 2>/dev/null | grep -q 'Soft blocked: no' && ok "bluetooth not blocked"

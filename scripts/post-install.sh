@@ -4,7 +4,7 @@
 # Idempotent: safe to run again. Nothing here touches partitions or the boot loader binaries.
 #
 # Options:
-#   --wifi wl|b43|none   Wi-Fi driver for the BCM4331 (default: wl)
+#   --wifi wl|b43|none   Wi-Fi driver for the BCM4331 (default: wl, on linux-lts)
 #   --x11 | --no-x11     install X11 packages+config / skip X11 files (default: X11 files only if xorg-server is installed)
 #   --no-extras          skip convenience packages (pavucontrol, playerctl, udiskie, gammastep, fonts)
 #   --layouts us,ru      set X11 keyboard layouts (Alt+Shift toggles)
@@ -93,6 +93,7 @@ put_initrd() { put "$@"; if ((PUT_CHANGED)); then CHANGED_INITRAMFS=1; fi; }
 
 install_configs() {
     put_initrd etc/modprobe.d/hid_apple.conf     root
+    put        etc/modprobe.d/btusb.conf         root
     put etc/udev/rules.d/91-kbd-backlight.rules  root
     put etc/modules-load.d/macbook81.conf        root
     put etc/tlp.d/10-macbook81.conf              root
@@ -102,11 +103,13 @@ install_configs() {
     case $WIFI in
         wl)
             put_initrd etc/modprobe.d/broadcom-wl.conf optional/wifi-wl
+            put_initrd etc/modprobe.d/keep-tg3.conf       optional/wifi-wl
             if ((SLEEP_HOOK)); then
                 put usr/lib/systemd/system-sleep/wl-reload optional/wifi-wl 755
             fi ;;
         b43)
             run rm -f "$ROOT/etc/modprobe.d/broadcom-wl.conf"
+            run rm -f "$ROOT/etc/modprobe.d/keep-tg3.conf"
             run rm -f "$ROOT/usr/lib/systemd/system-sleep/wl-reload"
             put_initrd etc/modprobe.d/b43.conf optional/wifi-b43
             CHANGED_INITRAMFS=1 ;;
@@ -114,10 +117,29 @@ install_configs() {
 }
 
 # ---------------------------------------------------------------- packages
+pkg_ver() {
+    command -v pacman >/dev/null 2>&1 || return 0
+    pacman -Q "$1" 2>/dev/null | awk '{print $2}'
+}
+
+# Linux 7.2 removed strncpy(); the frozen wl 6.30.223.271 sources do not build there.
+wl_unbuildable() {
+    local v=$1
+    [[ $v =~ ^([0-9]+)\.([0-9]+) ]] || return 1
+    local major=${BASH_REMATCH[1]} minor=${BASH_REMATCH[2]}
+    (( major > 7 || (major == 7 && minor >= 2) ))
+}
+
 kernel_headers() {
-    local k
+    local k ver
     for k in linux linux-lts linux-zen linux-hardened; do
-        pkg_has "$k" && printf '%s-headers\n' "$k"
+        pkg_has "$k" || continue
+        ver=$(pkg_ver "$k")
+        if wl_unbuildable "$ver"; then
+            warn "$k $ver cannot build broadcom-wl (Linux 7.2 removed strncpy). Not installing $k-headers."
+            continue
+        fi
+        printf '%s-headers\n' "$k"
     done
 }
 
@@ -129,9 +151,12 @@ install_packages() {
     [[ $X11 == yes ]] && pk+=(xorg-server xorg-xinit xorg-apps xf86-input-libinput xbindkeys)
     ((EXTRAS)) && pk+=(pavucontrol playerctl udiskie gammastep ttf-dejavu libva-utils)
     case $WIFI in
-        wl)  mapfile -t hdr < <(kernel_headers)
-             ((${#hdr[@]})) || warn "no known kernel package found for headers (linux, linux-lts, ...): DKMS cannot build wl"
-             pk+=("${hdr[@]}" broadcom-wl-dkms) ;;
+        wl)  # 6.18 LTS still builds wl. The current `linux` package (7.2) does not.
+             pk+=(linux-lts linux-lts-headers broadcom-wl-dkms)
+             local h
+             while IFS= read -r h; do
+                 [[ -n $h && $h != linux-lts-headers ]] && pk+=("$h")
+             done < <(kernel_headers) ;;
         b43) pk+=(b43-fwcutter) ;;
     esac
     log "packages (full system upgrade + install): ${pk[*]}"
@@ -215,6 +240,61 @@ kernel_param_step() {
     fi
 }
 
+# ---------------------------------------------------------------- linux-lts (wl does not build on 7.2+)
+verify_wl_module() {
+    local rel ver ko
+    ver=$(pkg_ver linux-lts)
+    if wl_unbuildable "$ver"; then
+        warn "linux-lts $ver also cannot build broadcom-wl. Wi-Fi will not work until Arch ships a patched driver."
+    fi
+    ((DRY)) && return 0
+    ko=$(find /usr/lib/modules -name 'wl.ko*' 2>/dev/null | grep -- '-lts' || true)
+    if [[ -n $ko ]]; then
+        log "wl module for linux-lts is built"
+    else
+        warn "wl.ko was not built for linux-lts. Wi-Fi will not work. Check: dkms status"
+    fi
+    rel=$(uname -r 2>/dev/null || true)
+    if wl_unbuildable "$rel"; then
+        warn "This boot is kernel $rel. Reboot and select vmlinuz-linux-lts. broadcom-wl does not build on Linux 7.2+."
+    fi
+    warn "wl has no WPA3 and no 802.11w. A network that requires either will not connect. Use WPA2 with PMF disabled."
+}
+
+prefer_linux_lts() {
+    local f found=0
+    for f in \
+        "$ROOT/boot/EFI/refind/refind.conf" \
+        "$ROOT/efi/EFI/refind/refind.conf" \
+        "$ROOT/boot/efi/EFI/refind/refind.conf"
+    do
+        [[ -f $f ]] || continue
+        found=1
+        if grep -Eq '^[[:space:]]*default_selection[[:space:]]+.*linux-lts' "$f"; then
+            log "rEFInd already prefers linux-lts ($f)"
+        elif grep -Eq '^[[:space:]]*default_selection[[:space:]]' "$f"; then
+            log "rEFInd: default_selection -> vmlinuz-linux-lts ($f)"
+            run sed -E -i.bak 's/^[[:space:]]*default_selection[[:space:]].*/default_selection vmlinuz-linux-lts/' "$f"
+        else
+            log "rEFInd: append default_selection vmlinuz-linux-lts ($f)"
+            if ((DRY)); then
+                echo "    [dry-run] append default_selection to $f" >&2
+            else
+                printf '\n# MacBookPro8,1: broadcom-wl does not build on Linux 7.2+\ndefault_selection vmlinuz-linux-lts\n' >> "$f"
+            fi
+        fi
+    done
+    if ((found == 0)); then
+        warn "rEFInd config not found. At the boot menu choose vmlinuz-linux-lts, not vmlinuz-linux."
+    fi
+    if [[ -f $ROOT/etc/default/grub ]]; then
+        warn "GRUB is installed. Boot the linux-lts menu entry. The newest kernel (linux 7.2) cannot build wl."
+    fi
+    if [[ -d $ROOT/boot/loader/entries || -d $ROOT/efi/loader/entries ]]; then
+        warn "systemd-boot is installed. Set default in loader.conf to the linux-lts entry. linux 7.2 cannot build wl."
+    fi
+}
+
 # ---------------------------------------------------------------- services
 other_network_manager() {
     local u
@@ -295,6 +375,10 @@ main() {
         if pkg_has xorg-server 2>/dev/null; then X11=yes; else X11=no; fi
     fi
     install_packages
+    if [[ $WIFI == wl ]]; then
+        verify_wl_module
+        prefer_linux_lts
+    fi
     if [[ $WIFI == b43 ]]; then
         aur_install b43-firmware || warn "b43-firmware (AUR) was NOT installed: Wi-Fi via b43 will not work until it is. Re-run this script."
     fi

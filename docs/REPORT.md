@@ -3,7 +3,7 @@
 Status: the script is shellcheck-clean and was tested against fixture files (boot-loader editing, idempotency),
 a fake root directory and `--dry-run`. It has **not** been run on a real MacBookPro8,1 with real `pacman`.
 Sources: ArchWiki (MacBookPro8,x, Intel graphics, Backlight, TLP, Broadcom wireless, Hardware video acceleration),
-rEFInd docs, brightnessctl README, package listings (Sep 2026).
+rEFInd docs, brightnessctl README, package listings (29 Sep 2026: `linux` 7.2.7, `linux-lts` 6.18.54, `broadcom-wl-dkms` 6.30.223.271-50).
 
 ## Done automatically
 
@@ -12,10 +12,10 @@ rEFInd docs, brightnessctl README, package listings (Sep 2026).
 | Safety | Refuses to run unless DMI product is `MacBookPro8,1` (`--force` overrides). Backs up overwritten files as `*.bak`. Re-running changes nothing that is already in place. | 15"/17" 8,2/8,3 have an AMD GPU |
 | Packages | `pacman -Syu --needed`: base-devel git dkms brightnessctl tlp lm_sensors bluez bluez-utils networkmanager pipewire pipewire-pulse pipewire-alsa wireplumber mesa libva-intel-driver intel-ucode; with `--x11`: xorg-server xorg-xinit xorg-apps xf86-input-libinput xbindkeys; extras: pavucontrol playerctl udiskie gammastep ttf-dejavu libva-utils | full upgrade, never a partial one |
 | Graphics | Xorg modesetting driver (no `xf86-video-intel`), Mesa `crocus`, VA-API via `libva-intel-driver` (Wiki: GMA 4500 up to Coffee Lake) | ArchWiki: Intel graphics, Hardware video acceleration |
-| Wi-Fi (default `wl`) | `broadcom-wl-dkms` + `<kernel>-headers` for every installed kernel (linux, -lts, -zen, -hardened); blacklist of competing in-kernel modules | ArchWiki: MacBookPro8,x |
-| Wi-Fi (`--wifi b43`) | `b43-fwcutter`, AUR `b43-firmware`, `btcoex=0`, removes the `wl` package and its blacklist | ArchWiki + kernel b43 docs; no 5 GHz, no 802.11n on this chip |
+| Wi-Fi (default `wl`) | `linux-lts` + `linux-lts-headers` + `broadcom-wl-dkms`. Headers for other installed kernels only when that kernel is older than 7.2 (`strncpy` was removed; wl 6.30.223.271 does not build). Blacklist of competing modules, plus `keep-tg3.conf` so BCM57765 Ethernet stays up. rEFInd `default_selection vmlinuz-linux-lts` when `refind.conf` is found | Linux 7.2 strncpy removal; ArchWiki: MacBookPro8,x; FS#70476 |
+| Wi-Fi (`--wifi b43`) | `b43-fwcutter`, AUR `b43-firmware`, `btcoex=0`, removes the `wl` package, its blacklist and `keep-tg3.conf`. In-kernel, so Linux 7.2 is fine | ArchWiki + kernel b43 docs; no 5 GHz, no 802.11n on this chip |
 | Network | Enables NetworkManager, unless another manager (systemd-networkd, iwd, dhcpcd, connman, wicd) is already enabled, then it warns and leaves it alone | avoids two managers fighting |
-| Bluetooth | `bluez`, `bluetooth.service` enabled; TLP told not to autosuspend the internal BT controller (`USB_EXCLUDE_BTUSB=1`) | ArchWiki: TLP |
+| Bluetooth | `bluez`, `bluetooth.service` enabled; TLP `USB_EXCLUDE_BTUSB=1`; `options btusb enable_autosuspend=0` because the driver turns autosuspend back on | TLP 1.10 |
 | Sound | PipeWire + WirePlumber + pulse/alsa shims; user units enabled globally | |
 | Keyboard | `/etc/modprobe.d/hid_apple.conf`: `fnmode=2` (F1-F12 by default, Fn for media keys). `--layouts us,ru` runs `localectl set-x11-keymap` with Alt+Shift toggle | ArchWiki: MacBookPro8,x |
 | Trackpad (X11) | `/etc/X11/xorg.conf.d/30-touchpad.conf`: libinput, tap, two-finger tap = middle, three-finger tap = right, clickfinger, natural scroll, disable-while-typing | replaces mtrack/synaptics |
@@ -40,7 +40,7 @@ rEFInd docs, brightnessctl README, package listings (Sep 2026).
 
 ## Known risks
 
-- **BCM4331 + `wl`:** a closed, frozen driver. A new kernel can break it. Keep `linux-lts` + `linux-lts-headers` as a fallback.
+- **BCM4331 + `wl`:** the driver does not build on Linux 7.2+ (`strncpy` was removed). The script installs `linux-lts` (6.18.x as of 29 Sep 2026) and boots that. It also has no WPA3 and no 802.11w. When `linux-lts` itself reaches 7.2, this breaks again until Arch patches the package.
 - **AUR packages** (`mbpfan`, `b43-firmware`) are unreviewed. The script pauses so you can read the PKGBUILD (`--yes` skips this). If AUR is unreachable, the rest still gets installed and you get a warning.
 - `pacman -Syu` upgrades the whole system, so a reboot may switch you to a new kernel.
 - Everything marked unverified above needs a real run. `scripts/check.sh` reports what came up. Please open an issue with its output.
